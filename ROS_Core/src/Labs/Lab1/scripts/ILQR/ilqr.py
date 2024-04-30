@@ -1,5 +1,5 @@
 from typing import Tuple, Optional, Dict, Union
-from jaxlib.xla_extension import ArrayImpl
+from jaxlib.xla_extension import ArrayImpl as DeviceArray
 import time
 import os
 import numpy as np
@@ -116,7 +116,7 @@ class ILQR():
 		for vertices in vertices_list:
 			self.obstacle_list.append(Obstacle(vertices))
 
-	def get_references(self, trajectory: Union[np.ndarray, ArrayImpl]):
+	def get_references(self, trajectory: Union[np.ndarray, DeviceArray]):
 		'''
 		Given the trajectory, get the path reference and obstacle information.
 		Args:
@@ -129,6 +129,61 @@ class ILQR():
 		path_refs = self.ref_path.get_reference(trajectory[:2, :])
 		obs_refs = self.collision_checker.check_collisions(trajectory, self.obstacle_list)
 		return path_refs, obs_refs
+
+	def Backward_Pass_Robust(self, trajectory, controls, path_refs, obs_refs, lamb):
+		q, r, Q, R, H = self.cost.get_derivatives_np(trajectory, controls, path_refs, obs_refs)
+		A, B = self.dyn.get_jacobian_np(trajectory, controls)
+
+		p, P = q[:,self.T-1], Q[:,:,self.T-1]
+		t = self.T - 2
+
+		k_open_loop = np.zeros((2, self.T))
+		K_closed_loop = np.zeros((2, 5, self.T))
+
+		while t >= 0:
+			Q_x = q[:,t] + A[:,:,t].T @ p
+			Q_u = r[:,t] + B[:,:,t].T @ p
+			Q_xx = Q[:,:,t] + A[:,:,t].T @ P @ A[:,:,t]
+			Q_uu = R[:,:,t] + B[:,:,t].T @ P @ B[:,:,t]
+			Q_ux = H[:,:,t] + B[:,:,t].T @ P @ A[:,:,t]
+
+			Q_uu_reg = R[:,:,t] + B[:,:,t].T @ (P+lamb*np.eye(5)) @ B[:,:,t]
+			Q_ux_reg = H[:,:,t] + B[:,:,t].T @ (P+lamb*np.eye(5)) @ A[:,:,t]
+
+			if np.isnan(Q_uu_reg).any() or np.isinf(Q_uu_reg).any():
+				continue
+			elif not np.all(np.linalg.eigvals(Q_uu_reg) > 0) and lamb < self.max_attempt:
+				lamb *= self.reg_scale_up
+				if lamb > self.reg_max:
+					raise Exception("Convergence failure within backward pass.")
+				t = self.T-2
+				p = q[:,self.T-1]
+				P = Q[:,:,self.T-1]
+				continue
+
+			k = -np.linalg.inv(Q_uu_reg)@Q_u
+			K = -np.linalg.inv(Q_uu_reg)@Q_ux_reg
+			k_open_loop[:,t] = k
+			K_closed_loop[:, :, t] = K
+
+			p = Q_x + K.T @ Q_uu @ k + K.T@Q_u + Q_ux.T@k
+			P = Q_xx + K.T @ Q_uu @ K + K.T@Q_ux + Q_ux.T@K
+			t -= 1
+
+		return K_closed_loop, k_open_loop, lamb*self.reg_scale_down
+
+	def Forward_Pass(self, trajectory, controls, K_closed_loop, k_open_loop, alpha):
+		x = np.zeros_like(trajectory)
+		u = np.zeros_like(controls)
+		x[:,0] = trajectory[:,0]
+
+		for t in range(self.T-1):
+			K = K_closed_loop[:,:,t]
+			k = k_open_loop[:,t]
+			u[:,t] = controls[:,t]+alpha*k+ K @ (x[:, t] - trajectory[:, t])
+			x[:,t+1], u[:,t+1] = self.dyn.integrate_forward_np(x[:,t], u[:,t])
+
+		return x, u
 
 	def plan(self, init_state: np.ndarray,
 				controls: Optional[np.ndarray] = None) -> Dict:
@@ -229,7 +284,37 @@ class ILQR():
         #   Q: np.ndarray, (dim_x, dim_u, T) hessian of cost function w.r.t. states
         #   R: np.ndarray, (dim_u, dim_u, T) hessian of cost function w.r.t. controls
         #   H: np.ndarray, (dim_x, dim_u, T) hessian of cost function w.r.t. states and controls
-		
+
+		lamb = self.reg_init
+		converged = False
+		for i in range(self.max_iter):
+			path_refs, obs_refs = self.get_references(trajectory)
+			K_closed_loop, k_open_loop, lamb = self.Backward_Pass_Robust(trajectory, controls, path_refs, obs_refs, lamb)
+			changed = False
+			for alpha in self.alphas :
+				trajectory_new, controls_new = self.Forward_Pass(trajectory, controls, K_closed_loop, k_open_loop, alpha)
+				path_refs_new, obs_refs_new = self.get_references(trajectory_new)
+				J_new = self.cost.get_traj_cost(trajectory_new, controls_new, path_refs_new, obs_refs_new)
+
+				#print(f"J_new: {J_new}; J: {J}") #commented by rob
+
+				if J_new<=J:
+					if np.abs(J - J_new) < self.tol:
+						converged = True
+					J = J_new
+					trajectory = trajectory_new
+					controls = controls_new
+					changed = True
+					break
+			if not changed:
+				print("line search failed with reg = ", lamb, " at step ", i)
+				status = -1
+				break
+			if converged:
+				print("converged after ", i, " steps.")
+				status = 0
+				break
+
 		########################### #END of TODO 1 #####################################
 
 		t_process = time.time() - t_start
@@ -237,9 +322,9 @@ class ILQR():
 				t_process=t_process, # Time spent on planning
 				trajectory = trajectory,
 				controls = controls,
-				status=None, #	TODO: Fill this in
-				K_closed_loop=None, # TODO: Fill this in
-				k_open_loop=None # TODO: Fill this in
+				status=status,
+				K_closed_loop=K_closed_loop,
+				k_open_loop=k_open_loop
 				# Optional TODO: Fill in other information you want to return
 		)
 		return solver_info
