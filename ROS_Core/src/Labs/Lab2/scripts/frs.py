@@ -40,6 +40,12 @@ def multistep_zonotope_reachset(init_box, a_mat, b_mat, input_box, dt_list, quic
     #     quick: if True, use the quick method, otherwise use the Kamenev method. Default: False
     # Output:
     #     z: the reachable set as a zonotope
+
+    reachable_set_list.append(init_z)
+    for dt in dt_list:
+        init_z = onestep_zonotope_reachset(init_z, a_mat, b_mat, input_box, dt, quick)
+        reachable_set_list.append(init_z)
+
     ############################
     
     return reachable_set_list

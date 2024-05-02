@@ -28,6 +28,7 @@ def frs2setarray(frs):
 
 class DynObstacle():
     def __init__(self):
+
         # Read ROS topic names to subscribe 
         self.dyn_obs_topic = get_ros_param('~dyn_obs_topic', '/Obstacles/Dynamic')
 
@@ -47,7 +48,9 @@ class DynObstacle():
         ###############################################
         # Class variable to store the most recent dynamic obstacle's poses
         self.dyn_obstacles = []
-        
+        self.dyn_obs_sub = rospy.Subscriber(self.dyn_obs_topic, OdometryArray, self.dyn_obs_callback, queue_size=1)
+        rospy.loginfo("Subscribed to {}".format(self.dyn_obs_topic))
+
         ###############################################
         ############## TODO ###########################
         # 1. Create a Dynamic Reconfigure Server to get <configConfig> message
@@ -69,10 +72,8 @@ class DynObstacle():
         self.dx = 0
         self.dy = 0 
         self.allow_lane_change = False
-
         
-        # Create a service server to calculate the FRS
-        reset_srv = rospy.Service('/obstacles/get_frs', GetFRS, self.srv_cb)
+        self.dyn_reconf_server = Server(configConfig, self.dyn_reconf_callback) 
 
         ###############################################
         ############## TODO ###########################
@@ -87,6 +88,27 @@ class DynObstacle():
         # Here is the tutorial for dynamic reconfigure
         # http://wiki.ros.org/ROS/Tutorials/WritingServiceClient%28python%29
         ###############################################
+
+        reset_srv = rospy.Service('/obstacles/get_frs', GetFRS, self.srv_cb)
+        rospy.loginfo("Service server for '/obstacles/get_frs' has been initialized")
+
+
+    def dyn_reconf_callback(self, config, level):
+        self.K_vx = config.K_vx
+        self.K_vy = config.K_vy
+        self.K_y = config.K_y
+        self.dx = config.dx
+        self.dy = config.dy
+        self.allow_lane_change = config.allow_lane_change
+        rospy.loginfo("Reconfigure Request: {0}".format(config))
+        return config
+
+    # LAB 2
+    def dyn_obs_callback(self, dyn_obs_msg):
+        '''
+        Subscriber callback function of dynamic obstacles
+        '''
+        self.dyn_obstacles = dyn_obs_msg.odom_list
 
     def srv_cb(self, req):
         '''
@@ -105,4 +127,9 @@ if __name__ == '__main__':
     #TODO: Initialize a ROS Node with a DynObstacle object
     ##########################################
     
-    pass
+    rospy.init_node('dynamic_obs', anonymous=True)  # Initialize the ROS node
+    try:
+        obstacle_detector = DynObstacle()  # Create an instance of the DynObstacle class
+        rospy.spin()  # Keep the node running until it's shut down
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Node terminated.")

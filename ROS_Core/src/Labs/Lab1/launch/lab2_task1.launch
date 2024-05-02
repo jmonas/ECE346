@@ -51,4 +51,6 @@
         <param name="PWM_model"            value="$(find racecar_planner)/configs/mlp_model.sav" />
     </node>
 
+    <node name="send_waypoint_node" pkg="racecar_planner" type="send_waypoint.py" output="screen"/>
+
 </launch>

@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import threading
 import rospy
 import numpy as np
@@ -369,9 +368,14 @@ class TrajectoryPlanner():
         We repeatedly call ILQR to replan the trajectory (policy) once the new state is available
         '''
         
+        counter = 0
+        times = []
         rospy.loginfo('Receding Horizon Planning thread started waiting for ROS service calls...')
         t_last_replan = 0
         while not rospy.is_shutdown():
+
+            t0 = time.time()
+
             # determine if we need to replan
             if self.plan_state_buffer.new_data_available:
                 state_cur = self.plan_state_buffer.readFromRT()
@@ -431,6 +435,14 @@ class TrajectoryPlanner():
                         # publish the new policy for RVIZ visualization
                         self.trajectory_pub.publish(new_policy.to_msg())        
                         t_last_replan = t_cur
+
+            if counter == 9:
+                print(np.mean(np.array(times)))
+                counter = 0
+                times = []
+            else:
+                times.append(time.time()-t0)
+                counter += 1
                     
                     
 
