@@ -32,6 +32,7 @@ class TrajectoryPlanner():
         # Indicate if the planner is used to generate a new trajectory
         self.update_lock = threading.Lock()
         self.latency = 0.0
+        rospy.set_param('obs_centers', 1)
         
         self.read_parameters()
         
@@ -368,13 +369,10 @@ class TrajectoryPlanner():
         We repeatedly call ILQR to replan the trajectory (policy) once the new state is available
         '''
         
-        counter = 0
-        times = []
+        received_path = False
         rospy.loginfo('Receding Horizon Planning thread started waiting for ROS service calls...')
         t_last_replan = 0
         while not rospy.is_shutdown():
-
-            t0 = time.time()
 
             # determine if we need to replan
             if self.plan_state_buffer.new_data_available:
@@ -385,22 +383,27 @@ class TrajectoryPlanner():
                 
                 # Do replanning
                 if dt >= self.replan_dt:
+
                     # Get the initial controls for hot start
                     init_controls = None
 
                     original_policy = self.policy_buffer.readFromRT()
                     if original_policy is not None:
                         init_controls = original_policy.get_ref_controls(t_cur)
-
-                    # Update the path
-                    if self.path_buffer.new_data_available:
-                        new_path = self.path_buffer.readFromRT()
-                        self.planner.update_ref_path(new_path)
                     
                     # Update the static obstacles
                     obstacles_list = []
                     for vertices in self.static_obstacle_dict.values():
                         obstacles_list.append(vertices)
+
+                    # Update the static obstacles
+                    obs_centers = []
+                    for vertices in self.static_obstacle_dict.values():
+                        x_cen = float(np.mean(vertices[:,0]))
+                        y_cen = float(np.mean(vertices[:,1]))
+                        obs_centers.append([x_cen,y_cen])
+                    rospy.set_param('obs_centers', obs_centers)
+
                     # update dynamic obstacles
                     try:
                         t_list= t_cur + np.arange(self.planner.T)*self.planner.dt
@@ -411,6 +414,51 @@ class TrajectoryPlanner():
                         rospy.logwarn_once('FRS server not available!')
                         frs_respond = None
                         
+                    # Update the path
+                    if self.path_buffer.new_data_available:
+
+                        received_path = True
+
+                        new_path = self.path_buffer.readFromRT()
+                        self.planner.update_ref_path(new_path)
+
+
+
+                        local_coords = new_path.global2local(obs_centers, phys_units=True)
+                        obs_dist_along_path = local_coords[0, :]
+                        lat_seps = local_coords[1, :]
+
+                        lat_seps = lat_seps[np.argsort(obs_dist_along_path)]
+                        obs_dist_along_path = obs_dist_along_path[np.argsort(obs_dist_along_path)]
+
+                        print(f"obs' dist along path: {obs_dist_along_path}")
+                        print(f"lat sep from path: {lat_seps}")
+
+                    if received_path:
+
+                        local_coords = new_path.global2local(state_cur[:2], phys_units=True, truck=True)
+
+                        truck_dist_along_path = local_coords[0]
+
+                        dist_to_obs = obs_dist_along_path - truck_dist_along_path
+                        dist_to_obs = dist_to_obs[dist_to_obs > 0]
+
+                        dist_cutoffs = [1,2] # length N
+                        Ts = [10,10,10] # length N+1
+                        obs_nearby = False
+                        for i, dist_cutoff in enumerate(dist_cutoffs):
+                            if np.any(dist_to_obs < dist_cutoff) and not obs_nearby:
+                                self.planner.T = Ts[i]
+                                obs_nearby = True
+                            elif i == len(dist_cutoffs)-1 and not obs_nearby:
+                                self.planner.T = Ts[i+1]
+                            print(f"T: {self.planner.T}")
+
+
+
+
+                    self.planner.T = 10
+
                     self.planner.update_obstacles(obstacles_list)
                     
                     # Replan use ilqr
@@ -422,6 +470,7 @@ class TrajectoryPlanner():
                         continue
                     
                     if self.planner_ready:
+
                         # If stop planning is called, we will not write to the buffer
                         new_policy = Policy(X = new_plan['trajectory'], 
                                             U = new_plan['controls'],
@@ -435,14 +484,6 @@ class TrajectoryPlanner():
                         # publish the new policy for RVIZ visualization
                         self.trajectory_pub.publish(new_policy.to_msg())        
                         t_last_replan = t_cur
-
-            if counter == 9:
-                print(np.mean(np.array(times)))
-                counter = 0
-                times = []
-            else:
-                times.append(time.time()-t0)
-                counter += 1
                     
                     
 

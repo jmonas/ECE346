@@ -375,8 +375,7 @@ class RefPath:
             global_states = global_states[:, np.newaxis]
         local_states = np.zeros(shape=(2, global_states.shape[1]))
         closest_pt, slope, progress = self.get_closest_pts(
-            global_states, normalize_progress=True
-        )
+            global_states)
         dx = global_states[0, :] - closest_pt[0, :]
         dy = global_states[1, :] - closest_pt[1, :]
         sr = np.sin(slope)
