@@ -10,12 +10,20 @@
     <arg name="init_y"              default="0.15"                     doc="initial y position"/>
     <arg name="init_yaw"            default="0"                     doc="initial z position"/>
     <arg name="num_dyn_obs"         default="0"                     doc="number of dynamic obsects"/>
-    <arg name="num_static_obs"      default="20"                     doc="number of static obsects"/>
+    <arg name="num_static_obs"      default="10"                     doc="number of static obsects"/>
     <arg name="static_obs_size"     default="0.2"                   doc="type of static obsects"/>
     <arg name="static_obs_topic"    default="/Obstacles/Static"     doc="ROS topic for static obstacles"/>
     <arg name="dyn_obs_topic"       default="/Obstacles/Dynamic"    doc="ROS topic for dynamic obstacles"/>
+
+    <arg name="obstacle_topic"      default="/Prediction/Obstacles" doc="ROS topic for obstacles"/>
+    <arg name="traj_topic"          default="/Planning/Trajectory"  doc="ROS topic for trajectory"/>
+    <arg name="path_topic"          default="/Routing/Path"         doc="ROS topic for reference path"/>
+    <arg name="receding_horizon"    default="true"                 doc="whether to use open loop planner"/>
+    <arg name="replan_dt"           default="0.1"                   doc="time step for replanning"/>
+    <arg name="ilqr_config"         default="configs/lab2_task1.yaml" doc="path to ilqr config file"/>
     
     <rosparam file="$(find final_project)/task1.yaml" command="load" />
+    <rosparam file="$(find racecar_planner)/configs/lab2_task1.yaml" command="load" />
 
     <node pkg="racecar_interface" type="simulation_node.py" name="simulation_node" output="$(arg output)">
         <param name="odom_topic"           value="$(arg odom_topic)" />
@@ -49,7 +57,7 @@
             <arg name="output"              value="$(arg output)"/>
             <arg name="odom_topic"          value="$(arg odom_topic)"/>
             <arg name="lane_change_cost"    value="$(arg lane_change_cost)"/>
-            <arg name="click_goal"          value="false"/>
+            <arg name="click_goal"          value="true"/>
     </include>
 
     <node type="rviz" name="rviz" pkg="rviz" 

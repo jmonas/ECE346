@@ -12,6 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   racecar_msgs
   racecar_routing
+  racecar_planner
 )
 
 # Uncomment this if the package has a setup.py. This macro ensures

@@ -14,6 +14,7 @@ from ILQR.ilqr_jax import ILQR_jax as ILQR
 from racecar_msgs.msg import ServoMsg, OdometryArray
 from racecar_planner.cfg import plannerConfig
 from visualization_msgs.msg import MarkerArray
+from geometry_msgs.msg import PoseStamped
 
 from dynamic_reconfigure.server import Server
 from tf.transformations import euler_from_quaternion
@@ -22,6 +23,10 @@ from nav_msgs.msg import Path as PathMsg # used to display the trajectory on RVI
 from std_srvs.srv import Empty, EmptyResponse
 from racecar_obs_detection.srv import GetFRS, GetFRSResponse
 import queue
+
+buffer_reset = False
+amount_of_pulses = 3
+current_pulse = 0
 
 class TrajectoryPlanner():
     '''
@@ -47,6 +52,7 @@ class TrajectoryPlanner():
 
         self.setup_service()
 
+        #rospy.loginfo("TRAJ PLANNER IS READY BABY!!")
         # start planning and control thread
         threading.Thread(target=self.control_thread).start()
         if not self.receding_horizon:
@@ -111,7 +117,6 @@ class TrajectoryPlanner():
         '''
         # Publisher for the planned nominal trajectory for visualization
         self.trajectory_pub = rospy.Publisher(self.traj_topic, PathMsg, queue_size=1)
-
         # Publisher for the control command
         self.control_pub = rospy.Publisher(self.control_topic, ServoMsg, queue_size=1)
         
@@ -192,18 +197,51 @@ class TrajectoryPlanner():
         speed_limit = []
         
         for waypoint in path_msg.poses:
-            x.append(waypoint.pose.position.x)
+            x.append(waypoint.pose.position.x) # you can add +0.2 to this to go to the right, etc
             y.append(waypoint.pose.position.y)
             width_L.append(waypoint.pose.orientation.x)
             width_R.append(waypoint.pose.orientation.y)
             speed_limit.append(waypoint.pose.orientation.z)
+            #print("point in the line (Cart):", [waypoint.pose.position.x, waypoint.pose.position.y])
+            #print("point in the line local[]:", [waypoint.pose.position.x, waypoint.pose.position.y])
                     
         centerline = np.array([x, y])
-        
+
         try:
             ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+            
+            # would need to adjust the reference path here for final project task 1 before we write to buffer
+            #print("centerline: ", centerline)
             self.path_buffer.writeFromNonRT(ref_path)
             rospy.loginfo('Path received!')
+
+            x = np.array(x)
+            y = np.array(y)
+
+            # This is for sending the percentage through the route we're at
+            global_states = np.vstack((x, y))
+            local_states = ref_path.global2local(global_states=global_states)
+            end_index = 0
+            for i, val in enumerate(local_states[0,:]):
+                if val > 0.75: #threshold as a percentage through the route 
+                    end_index = i
+                    pub = rospy.Publisher("switchpoint", PoseStamped, queue_size=1)
+                    pose = PoseStamped()
+                    pose.header.stamp = rospy.Time.now()
+                    pose.header.frame_id = "map"
+                    pose.pose.position.x = global_states[0,end_index]
+                    pose.pose.position.y = global_states[1,end_index]
+                    pose.pose.position.z = local_states[0, end_index] # percentage through.. > 0.75
+                    pose.pose.orientation.w = 1.0
+                    pub.publish(pose)
+                    
+                    break
+            #local_states[1, :] = 0.2 # make all deviate slightly right
+            #print("global point before: ", global_states)
+            #global_states = ref_path.local2global(local_states)
+            #print("global point after: ", global_states)   
+            #print("local point: ", local_states)
+            #print()
         except:
             rospy.logwarn('Invalid path received! Move your robot and retry!')
 
@@ -223,7 +261,9 @@ class TrajectoryPlanner():
             accel: float, acceleration command [m/s^2]
             steer_rate: float, steering rate command [rad/s]
         '''
-
+        global buffer_reset
+        global amount_of_pulses
+        global current_pulse
         ##### TODO: Implement your control law here ########
         # Hint: make sure that the difference in heading is between [-pi, pi]
         dx = x - x_ref
@@ -232,6 +272,19 @@ class TrajectoryPlanner():
         accel = u[0]
         steer_rate = u[1]
         ##### END OF TODO ####################################
+        # if accel > 2: # limits the acceleration to slow it down
+        #     accel = accel
+        # if accel > 0.01:
+        #     accel = accel*0.5
+
+        if buffer_reset:
+            buffer_reset = False
+            # current_pulse = current_pulse + 1
+            # if current_pulse > amount_of_pulses:
+            #     current_pulse = 0
+            #     buffer_reset = False
+            # print("sending pulse: ", current_pulse)
+        #print("accel: " + str(accel))
 
         return accel, steer_rate
 
@@ -239,6 +292,7 @@ class TrajectoryPlanner():
         '''
         Main control thread to publish control command
         '''
+        global buffer_reset
         rate = rospy.Rate(40)
         u_queue = queue.Queue()
         
@@ -268,8 +322,10 @@ class TrajectoryPlanner():
             policy = self.policy_buffer.readFromRT()
             
             if self.simulation:
+                #print("in sim")
                 t_act = rospy.get_rostime().to_sec()
             else:
+                #print("not in sim")
                 self.update_lock.acquire()
                 t_act = rospy.get_rostime().to_sec() + self.latency 
                 self.update_lock.release()
@@ -324,10 +380,7 @@ class TrajectoryPlanner():
             # Generate control command from the policy
             if policy is not None:
                 # get policy
-                if not self.receding_horizon:
-                    state_ref, u_ref, K = policy.get_policy_by_state(state_cur)
-                else:
-                    state_ref, u_ref, K = policy.get_policy(t_act)
+                state_ref, u_ref, K = policy.get_policy(t_act)
 
                 if state_ref is not None:
                     accel, steer_rate = self.compute_control(state_cur, state_ref, u_ref, K)
@@ -335,6 +388,7 @@ class TrajectoryPlanner():
                 else:
                     # reset the policy buffer if the policy is not valid
                     rospy.logwarn("Try to retrieve a policy beyond the horizon! Reset the policy buffer!")
+                    buffer_reset = True
                     self.policy_buffer.reset()
                         
             # generate control command
@@ -344,7 +398,8 @@ class TrajectoryPlanner():
                 throttle_pwm, steer_pwm = self.pwm_converter.convert(accel, steer, state_cur[2])
             else:
                 throttle_pwm = accel
-                steer_pwm = steer                
+                steer_pwm = steer
+
             
             # publish control command
             servo_msg = ServoMsg()
@@ -396,7 +451,8 @@ class TrajectoryPlanner():
                     if self.path_buffer.new_data_available:
                         new_path = self.path_buffer.readFromRT()
                         self.planner.update_ref_path(new_path)
-                    
+                        #print("New path, ", new_path)
+
                     # Update the static obstacles
                     obstacles_list = []
                     for vertices in self.static_obstacle_dict.values():
@@ -415,6 +471,7 @@ class TrajectoryPlanner():
                     
                     # Replan use ilqr
                     new_plan = self.planner.plan(state_cur[:-1], init_controls, verbose=False)
+
                     
                     plan_status = new_plan['status']
                     if plan_status == -1:
@@ -431,13 +488,14 @@ class TrajectoryPlanner():
                                             T = self.planner.T)
                         
                         self.policy_buffer.writeFromNonRT(new_policy)
+                        #print("policy: ", new_policy)
                         
                         # publish the new policy for RVIZ visualization
                         self.trajectory_pub.publish(new_policy.to_msg())        
                         t_last_replan = t_cur
 
             if counter == 9:
-                print(np.mean(np.array(times)))
+                #print(np.mean(np.array(times)))
                 counter = 0
                 times = []
             else:

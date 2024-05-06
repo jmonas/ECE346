@@ -23,5 +23,6 @@ def send_waypoint(x, y, z, frame_id="map", qx=0.0, qy=0.0, qz=0.0, qw=1.0):
     rospy.loginfo("Waypoint sent: {}".format(waypoint))
 
 if __name__ == '__main__':
+    print("SEND WAYPOINT NODE STARTING UP!")
     # Example waypoint coordinates
     send_waypoint(1.0, 2.0, 0.0)

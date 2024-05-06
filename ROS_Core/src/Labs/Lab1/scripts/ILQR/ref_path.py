@@ -209,10 +209,13 @@ class RefPath:
         Returns:
             np.ndarray: trajectory in the global frame.
         """
+        print(1)
         flatten = False
+        print(1)
         if local_states.ndim == 1:
             flatten = True
             local_states = local_states[:, np.newaxis]
+            
         num_pts = local_states.shape[1]
         progress = local_states[0, :]
         assert np.min(progress) >= 0. and np.max(progress) <= 1., (
@@ -248,9 +251,7 @@ class RefPath:
             flatten = True
             global_states = global_states[:, np.newaxis]
         local_states = np.zeros(shape=(2, global_states.shape[1]))
-        closest_pt, slope, progress = self.get_closest_pts(
-            global_states, normalize_progress=True
-        )
+        closest_pt, slope, progress = self.get_closest_pts(global_states)
         dx = global_states[0, :] - closest_pt[0, :]
         dy = global_states[1, :] - closest_pt[1, :]
         sr = np.sin(slope)
