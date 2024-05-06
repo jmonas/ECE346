@@ -23,6 +23,10 @@ from std_srvs.srv import Empty, EmptyResponse
 from racecar_obs_detection.srv import GetFRS, GetFRSResponse
 import queue
 
+
+
+        
+
 class TrajectoryPlanner():
     '''
     Main class for the Receding Horizon trajectory planner
@@ -96,6 +100,11 @@ class TrajectoryPlanner():
         '''
         # Initialize ILQR solver
         self.planner = ILQR(self.ilqr_params_abs_path)
+        print("COLLLLLLLLEEEEE")
+        print(self.ilqr_params_abs_path)
+        self.user_planner = ILQR("/Users/owner/Desktop/copyECE346/ECE346/ROS_Core/src/Labs/Lab1/configs/safety.yaml")
+
+
 
         # create buffers to handle multi-threading
         self.plan_state_buffer = RealtimeBuffer()
@@ -113,7 +122,7 @@ class TrajectoryPlanner():
         self.trajectory_pub = rospy.Publisher(self.traj_topic, PathMsg, queue_size=1)
 
         # Publisher for the control command
-        self.control_pub = rospy.Publisher(self.control_topic, ServoMsg, queue_size=1)
+        self.control_pub = rospy.Publisher('/planner_control', ServoMsg, queue_size=1)
         
         # Publisher for FRS visualization
         self.frs_pub = rospy.Publisher('/vis/FRS', MarkerArray, queue_size=1)
@@ -125,6 +134,11 @@ class TrajectoryPlanner():
         self.pose_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odometry_callback, queue_size=10)
         self.path_sub = rospy.Subscriber(self.path_topic, PathMsg, self.path_callback, queue_size=10)
         self.static_obs_sub = rospy.Subscriber(self.static_obs_topic, MarkerArray, self.static_obstacle_callback, queue_size=10)
+        self.user_input_sub = rospy.Subscriber('/keyboard_control', ServoMsg, self.keyboard_callback, queue_size=10)
+
+    def keyboard_callback(self, msg):
+        print("WERE IN CALLBACK")
+        self.user_input = [msg.throttle, msg.steer]
 
     def static_obstacle_callback(self, msg):
         '''
@@ -349,8 +363,15 @@ class TrajectoryPlanner():
             # publish control command
             servo_msg = ServoMsg()
             servo_msg.header.stamp = rospy.get_rostime() # use the current time to avoid synchronization issue
-            servo_msg.throttle = throttle_pwm
-            servo_msg.steer = steer_pwm
+            
+            if self.override_user:
+                servo_msg.throttle = throttle_pwm
+                servo_msg.steer = steer_pwm
+            else:   
+                servo_msg.throttle = self.user_input[0]
+                servo_msg.steer = self.user_input[1]
+                
+
             self.control_pub.publish(servo_msg)
             
             # Record the control command and state for next iteration
@@ -361,6 +382,19 @@ class TrajectoryPlanner():
 
             # end of while loop
             rate.sleep()
+
+    def dyn_step(x, u, dt):
+        dx = np.array([x[2]*np.cos(x[3]),
+                    x[2]*np.sin(x[3]),
+                    u[0],
+                    x[2]*np.tan(u[1]*1.1)/0.257,
+                    0
+                    ])
+        x_new = x + dx*dt
+        x_new[2] = max(0, x_new[2]) # do not allow negative velocity
+        x_new[3] = np.mod(x_new[3] + np.pi, 2 * np.pi) - np.pi
+        x_new[-1] = u[1]
+        return x_new
 
     def receding_horizon_planning_thread(self):
         '''
@@ -415,11 +449,26 @@ class TrajectoryPlanner():
                     
                     # Replan use ilqr
                     new_plan = self.planner.plan(state_cur[:-1], init_controls, verbose=False)
+
+                    user_state = self.dyn_step(state_cur[:-1], self.user_input, 0.5)
+                    user_plan = self.user_planner.plan(user_state, init_controls, verbose = False)
+
+
                     
                     plan_status = new_plan['status']
                     if plan_status == -1:
                         rospy.logwarn_once('No path specified!')
                         continue
+
+                    plan_status = new_plan['status']
+                    if plan_status == -1:
+                        rospy.logwarn_once('no path specified')
+                        continue
+
+
+                    print(user_plan['J'])
+                    self.override_user = user_plan['J'] > 100
+                    print(self.override_user)
                     
                     if self.planner_ready:
                         # If stop planning is called, we will not write to the buffer
