@@ -73,7 +73,9 @@ class ILQR_jax():
 	def get_references(self, trajectory):
 		states_np = np.asarray(trajectory)
 		path_refs = self.ref_path.get_reference(states_np[:2, :])
+
 		obs_refs = self.collision_checker.check_collisions(states_np, self.obstacle_list)
+
 		return path_refs, obs_refs
 
 	def plan(self, init_state: np.ndarray, 
@@ -92,10 +94,11 @@ class ILQR_jax():
 		'''
 		# np.set_printoptions(suppress=True, precision=5)
 		if controls is None:
-			controls =np.zeros((self.dim_u, self.T))
+			controls = np.zeros((self.dim_u, self.T))
 		else:
-			assert controls.shape[1] == self.T
-		
+			if controls.shape[1] != self.T:
+				controls = np.zeros((self.dim_u, self.T))
+
 		# Rolls out the nominal trajectory and gets the initial cost.
 		#* This is differnet from the naive ILQR as it relies on the information
 		#* from the pyspline.

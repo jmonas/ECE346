@@ -56,6 +56,7 @@ class BaseCost(ABC):
 		return:
 			cost: float
 		'''
+
 		running_costs = jax.vmap(self.get_running_cost,
 						in_axes=(1, 1, 1))(trajectory, controls, path_refs)
 		terminal_cost = self.get_terminal_cost(path_refs)

@@ -169,7 +169,7 @@ class RefPath:
         slope = slope[np.newaxis, :]
         return np.concatenate([closest_pt, slope, v_ref, s, width_right, width_left], axis=0)
 
-    def get_closest_pts(self, points: np.ndarray, eps: Optional[float] = 1e-3) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def get_closest_pts(self, points: np.ndarray, eps: Optional[float] = 1e-3, truck=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Gets the closest points on the centerline, the slope of their tangent
         lines, and the progress given the points in the global frame.
@@ -186,17 +186,41 @@ class RefPath:
             np.ndarray: the normalized progress along the centerline. This vector is of the
                 shape (1, N).
         """
-        if len(points.shape) == 1:
+
+        if truck:
+
+            # if len(points) == 2:
             points = points[:, np.newaxis]
             s, _ = self.center_line.projectPoint(points.T, eps=eps)
             s = np.array([s])
-        else:
-            s, _ = self.center_line.projectPoint(points.T, eps=eps)
-            
-        closest_pt, slope = self._interp_s(s)
-        slope = slope[np.newaxis, :]
+            # else:
+            # try:
+            #     s, _ = self.center_line.projectPoint(points.T, eps=eps)
+            # except:
+            #     try:
+            #         s, _ = self.center_line.projectPoint(points, eps=eps)
+            #     except:
+            #         print('points array wrong shape')
 
-        return closest_pt, slope, s
+            closest_pt, slope = self._interp_s(s)
+            slope = slope[np.newaxis, :]
+
+            return closest_pt, slope, s
+        
+        else:
+
+            try:
+                s, _ = self.center_line.projectPoint(points.T, eps=eps)
+            except:
+                try:
+                    s, _ = self.center_line.projectPoint(points, eps=eps)
+                except:
+                    print('points array wrong shape')
+
+            closest_pt, slope = self._interp_s(s)
+            slope = slope[np.newaxis, :]
+
+            return closest_pt, slope, s
 
     def local2global(self, local_states: np.ndarray, return_slope=False) -> np.ndarray:
         """
@@ -231,7 +255,7 @@ class RefPath:
             return global_states, slope
         return global_states
 
-    def global2local(self, global_states: np.ndarray) -> np.ndarray:
+    def global2local(self, global_states: np.ndarray, phys_units=False, truck=False) -> np.ndarray:
         """
         Transforms trajectory in the global frame to the local frame (progress, lateral
         deviation).
@@ -243,25 +267,35 @@ class RefPath:
         Returns:
             np.ndarray: trajectory in the local frame.
         """
-        flatten = False
-        if global_states.ndim == 1:
-            flatten = True
+
+        if truck:
             global_states = global_states[:, np.newaxis]
-        local_states = np.zeros(shape=(2, global_states.shape[1]))
-        closest_pt, slope, progress = self.get_closest_pts(
-            global_states, normalize_progress=True
-        )
-        dx = global_states[0, :] - closest_pt[0, :]
-        dy = global_states[1, :] - closest_pt[1, :]
-        sr = np.sin(slope)
-        cr = np.cos(slope)
+
+        closest_pt, slope, progress = self.get_closest_pts(global_states, truck=truck)
+
+        if truck:
+
+            dx = global_states[0] - closest_pt[0]
+            dy = global_states[1] - closest_pt[1]
+            sr = np.sin(slope[0])
+            cr = np.cos(slope[0])
+        
+        else:
+
+            dx = global_states[:, 0] - closest_pt[0, :].T
+            dy = global_states[:, 1] - closest_pt[1, :].T
+            sr = np.sin(slope[0])
+            cr = np.cos(slope[0])
 
         lateral_dev = sr*dx - cr*dy
-        local_states[0, :] = progress.reshape(-1)
-        local_states[1, :] = lateral_dev
 
-        if flatten:
-            local_states = local_states[:, 0]
+        if truck:
+            local_states = np.array([progress[0] * self.length, lateral_dev[0]])
+
+        else:
+            local_states = np.zeros(shape=(2, lateral_dev[np.logical_and(np.logical_and(np.abs(lateral_dev) < 0.5, progress < 1), progress > 0)].shape[0]))
+            local_states[0, :] = progress[np.logical_and(np.logical_and(np.abs(lateral_dev) < 0.5, progress < 1), progress > 0)] * self.length
+            local_states[1, :] = lateral_dev[np.logical_and(np.logical_and(np.abs(lateral_dev) < 0.5, progress < 1), progress > 0)]
 
         return local_states
 

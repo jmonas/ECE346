@@ -116,11 +116,11 @@ class CollisionChecker:
         # No obstacles return None
         if num_obstacles == 0:
             return None
-        
+
         # initialize the collision_ref for the ego vehicle
-        collision_ref = np.zeros((num_obstacles, 5, self.step))
+        collision_ref = np.zeros((num_obstacles, 5, state.shape[1]))
 
         for i, obstacle in enumerate(obstacles):
-            for t in range(self.step):
+            for t in range(state.shape[1]):
                 collision_ref[i,:, t] = self._check_collision(state[:,t], obstacle.at(t))
         return collision_ref
