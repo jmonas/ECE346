@@ -136,7 +136,7 @@ if __name__ == '__main__':
             #print("     Distance to goal: ", distance_to_goal)
             #print()
             # to change the percentage down the line of the switchpoint, look in traj_planner.py ("if val >")
-            if distance_to_switchpoint < 0.25 or distance_to_goal < 0.25:
+            if distance_to_switchpoint < 0.3 or distance_to_goal < 0.3:
                 time_now = rospy.Time.now().to_sec()
                 time_since = time_now - last_replan_time
                 time_total = time_now - start_time
